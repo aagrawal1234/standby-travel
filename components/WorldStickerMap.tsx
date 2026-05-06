@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Minus, Plus, RotateCcw } from "lucide-react";
+import { Minus, Plane, Plus, RotateCcw } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import { geoNaturalEarth1, geoPath } from "d3-geo";
@@ -31,6 +31,13 @@ type DragState = {
   view: ViewState;
 };
 
+type PinchState = {
+  distance: number;
+  mapX: number;
+  mapY: number;
+  view: ViewState;
+};
+
 type ViewportSize = {
   width: number;
   height: number;
@@ -42,6 +49,9 @@ type MapMarker = {
   src: string;
   x: number;
   y: number;
+  mapX: number;
+  mapY: number;
+  copy: number;
   anchorX: number;
   anchorY: number;
   key: string;
@@ -54,15 +64,33 @@ type ClickPulse = {
   y: number;
 };
 
+type MapPlanePosition = {
+  x: number;
+  y: number;
+  angle: number;
+};
+
+type MapPlaneTarget = {
+  x: number;
+  y: number;
+  speed: number;
+};
+
+type MapTrailPoint = {
+  id: number;
+  x: number;
+  y: number;
+};
+
 const MIN_SCALE = 1;
 const MAX_SCALE = 14;
+const TRAIL_POINTS = 26;
 const WORLD_COPIES = [-1, 0, 1, 2];
-const FLY_TO_PLANE_EVENT = "standby-travel:fly-plane-to";
 
 const mapStickerShapeClasses = {
-  square: "h-8 w-8 sm:h-10 sm:w-10 lg:h-12 lg:w-12",
-  portrait: "h-10 w-8 sm:h-12 sm:w-10 lg:h-14 lg:w-11",
-  landscape: "h-8 w-11 sm:h-10 sm:w-14 lg:h-12 lg:w-16",
+  square: "h-7 w-7 sm:h-10 sm:w-10 lg:h-12 lg:w-12",
+  portrait: "h-8 w-6 sm:h-12 sm:w-10 lg:h-14 lg:w-11",
+  landscape: "h-7 w-9 sm:h-10 sm:w-14 lg:h-12 lg:w-16",
 };
 
 const landFeature = feature(
@@ -84,6 +112,14 @@ function wrapX(x: number, scale: number, width: number) {
   return ((((x % period) + period) % period) - period);
 }
 
+function wrapMapX(x: number, width: number) {
+  if (width <= 0) {
+    return x;
+  }
+
+  return ((x % width) + width) % width;
+}
+
 function clampY(y: number, scale: number, height: number) {
   if (scale <= 1) {
     return 0;
@@ -102,20 +138,56 @@ function stickerImageSrc(trip: Trip) {
     : trip.sticker.src;
 }
 
+function distanceBetween(
+  first: { x: number; y: number },
+  second: { x: number; y: number },
+) {
+  return Math.hypot(second.x - first.x, second.y - first.y);
+}
+
+function centerBetween(
+  first: { x: number; y: number },
+  second: { x: number; y: number },
+) {
+  return {
+    x: (first.x + second.x) / 2,
+    y: (first.y + second.y) / 2,
+  };
+}
+
 export function WorldStickerMap({ trips }: WorldStickerMapProps) {
   const router = useRouter();
   const viewportRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
+  const latestViewRef = useRef<ViewState>({ scale: 1, x: 0, y: 0 });
+  const activePointersRef = useRef(new Map<number, { x: number; y: number }>());
+  const pinchRef = useRef<PinchState | null>(null);
+  const hasInitializedViewRef = useRef(false);
+  const hasInteractedRef = useRef(false);
   const navigationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
+  const planeAnimationRef = useRef<number | null>(null);
+  const planeCurrentRef = useRef({ x: 80, y: 80 });
+  const planeTargetRef = useRef<MapPlaneTarget>({ x: 420, y: 220, speed: 90 });
+  const trailIdRef = useRef(0);
   const pulseKeyRef = useRef(0);
   const [view, setView] = useState<ViewState>({ scale: 1, x: 0, y: 0 });
   const [clickPulse, setClickPulse] = useState<ClickPulse | null>(null);
+  const [mapPlane, setMapPlane] = useState<MapPlanePosition>({
+    x: 80,
+    y: 80,
+    angle: -25,
+  });
+  const [mapTrail, setMapTrail] = useState<MapTrailPoint[]>([]);
   const [size, setSize] = useState<ViewportSize>({
     width: 1200,
     height: 720,
   });
+
+  useEffect(() => {
+    latestViewRef.current = view;
+  }, [view]);
 
   useEffect(() => {
     if (!viewportRef.current) {
@@ -138,6 +210,10 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
     return () => {
       if (navigationTimeoutRef.current) {
         clearTimeout(navigationTimeoutRef.current);
+      }
+
+      if (planeAnimationRef.current) {
+        cancelAnimationFrame(planeAnimationRef.current);
       }
     };
   }, []);
@@ -163,7 +239,118 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
     };
   }, [size.height, size.width]);
 
+  const preferredView = useMemo(() => {
+    if (size.width >= 700) {
+      return { scale: 1, x: 0, y: 0 };
+    }
+
+    const projectedTrips = trips
+      .map((trip) => map.projection([trip.mapPoint.lng, trip.mapPoint.lat]))
+      .filter((point): point is [number, number] => Boolean(point));
+
+    if (!projectedTrips.length) {
+      return { scale: 1, x: 0, y: 0 };
+    }
+
+    const averageX =
+      projectedTrips.reduce((total, point) => total + point[0], 0) /
+      projectedTrips.length;
+    const averageY =
+      projectedTrips.reduce((total, point) => total + point[1], 0) /
+      projectedTrips.length;
+    const scale = 1.18;
+
+    return {
+      scale,
+      x: wrapX(size.width / 2 - averageX * scale, scale, map.worldWidth),
+      y: clampY(size.height / 2 - averageY * scale, scale, size.height),
+    };
+  }, [map, size.height, size.width, trips]);
+
+  useEffect(() => {
+    if (hasInitializedViewRef.current || hasInteractedRef.current) {
+      return;
+    }
+
+    setView(preferredView);
+    hasInitializedViewRef.current = true;
+  }, [preferredView]);
+
+  useEffect(() => {
+    const prefersReducedMotion = window.matchMedia(
+      "(prefers-reduced-motion: reduce)",
+    ).matches;
+
+    if (prefersReducedMotion) {
+      return;
+    }
+
+    const pickTarget = (): MapPlaneTarget => ({
+      x: Math.random() * map.worldWidth,
+      y: 34 + Math.random() * Math.max(size.height - 68, 1),
+      speed: 48 + Math.random() * 95,
+    });
+
+    planeCurrentRef.current = {
+      x: wrapMapX(planeCurrentRef.current.x, map.worldWidth),
+      y: clamp(planeCurrentRef.current.y, 24, size.height - 24),
+    };
+    planeTargetRef.current = pickTarget();
+
+    let lastTime = performance.now();
+    let lastTrailTime = 0;
+
+    const tick = (now: number) => {
+      const dt = Math.min((now - lastTime) / 1000, 0.05);
+      lastTime = now;
+
+      const current = planeCurrentRef.current;
+      const target = planeTargetRef.current;
+      const dx = target.x - current.x;
+      const dy = target.y - current.y;
+      const distance = Math.hypot(dx, dy);
+
+      if (distance < 4) {
+        planeCurrentRef.current = {
+          ...current,
+          x: wrapMapX(current.x, map.worldWidth),
+        };
+        planeTargetRef.current = pickTarget();
+      } else {
+        const step = Math.min(target.speed * dt, distance);
+        const next = {
+          x: current.x + (dx / distance) * step,
+          y: current.y + (dy / distance) * step,
+        };
+        const angle = (Math.atan2(dy, dx) * 180) / Math.PI + 45;
+
+        planeCurrentRef.current = next;
+        setMapPlane({ ...next, angle });
+
+        if (now - lastTrailTime > 105) {
+          lastTrailTime = now;
+          setMapTrail((points) => [
+            ...points.slice(-(TRAIL_POINTS - 1)),
+            { id: trailIdRef.current++, ...next },
+          ]);
+        }
+      }
+
+      planeAnimationRef.current = requestAnimationFrame(tick);
+    };
+
+    planeAnimationRef.current = requestAnimationFrame(tick);
+
+    return () => {
+      if (planeAnimationRef.current) {
+        cancelAnimationFrame(planeAnimationRef.current);
+      }
+    };
+  }, [map.worldWidth, size.height]);
+
   const zoomAt = (nextScale: number, originX?: number, originY?: number) => {
+    hasInteractedRef.current = true;
+
     setView((current) => {
       const centerX = originX ?? size.width / 2;
       const centerY = originY ?? size.height / 2;
@@ -202,11 +389,18 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
       x: marker.x,
       y: marker.y,
     });
-    window.dispatchEvent(
-      new CustomEvent(FLY_TO_PLANE_EVENT, {
-        detail: { x: marker.x, y: marker.y, duration: 620 },
-      }),
+
+    const targetPlaneX = marker.mapX + marker.copy * map.worldWidth;
+    const distance = Math.hypot(
+      targetPlaneX - planeCurrentRef.current.x,
+      marker.mapY - planeCurrentRef.current.y,
     );
+
+    planeTargetRef.current = {
+      x: targetPlaneX,
+      y: marker.mapY,
+      speed: Math.max(distance / 0.62, 520 / view.scale),
+    };
 
     if (navigationTimeoutRef.current) {
       clearTimeout(navigationTimeoutRef.current);
@@ -226,6 +420,8 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
     }
 
     return WORLD_COPIES.flatMap((copy) => {
+      const mapX = point[0] + (trip.mapPoint.offsetX ?? 0) / view.scale;
+      const mapY = point[1] + (trip.mapPoint.offsetY ?? 0) / view.scale;
       const anchorX =
         view.x + copy * map.worldWidth * view.scale + point[0] * view.scale;
       const anchorY = view.y + point[1] * view.scale;
@@ -248,6 +444,9 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
           src,
           x,
           y,
+          mapX,
+          mapY,
+          copy,
           anchorX,
           anchorY,
           key: `${trip.slug}-${copy}`,
@@ -267,6 +466,7 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
       className="relative h-dvh w-full touch-none overflow-hidden outline-none"
       onWheel={(event) => {
         event.preventDefault();
+        hasInteractedRef.current = true;
         const bounds = event.currentTarget.getBoundingClientRect();
         const zoomIntensity = event.deltaY > 0 ? 0.86 : 1.16;
 
@@ -281,15 +481,72 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
           return;
         }
 
+        hasInteractedRef.current = true;
         event.currentTarget.setPointerCapture(event.pointerId);
-        dragRef.current = {
-          pointerId: event.pointerId,
-          startX: event.clientX,
-          startY: event.clientY,
-          view,
-        };
+        activePointersRef.current.set(event.pointerId, {
+          x: event.clientX,
+          y: event.clientY,
+        });
+
+        const activePointers = Array.from(activePointersRef.current.values());
+
+        if (activePointers.length >= 2) {
+          const [first, second] = activePointers;
+          const center = centerBetween(first, second);
+          const bounds = event.currentTarget.getBoundingClientRect();
+          const centerX = center.x - bounds.left;
+          const centerY = center.y - bounds.top;
+          const currentView = latestViewRef.current;
+
+          pinchRef.current = {
+            distance: distanceBetween(first, second),
+            mapX: (centerX - currentView.x) / currentView.scale,
+            mapY: (centerY - currentView.y) / currentView.scale,
+            view: currentView,
+          };
+          dragRef.current = null;
+        } else {
+          pinchRef.current = null;
+          dragRef.current = {
+            pointerId: event.pointerId,
+            startX: event.clientX,
+            startY: event.clientY,
+            view: latestViewRef.current,
+          };
+        }
       }}
       onPointerMove={(event) => {
+        if (activePointersRef.current.has(event.pointerId)) {
+          activePointersRef.current.set(event.pointerId, {
+            x: event.clientX,
+            y: event.clientY,
+          });
+        }
+
+        const activePointers = Array.from(activePointersRef.current.values());
+        const pinch = pinchRef.current;
+
+        if (pinch && activePointers.length >= 2) {
+          const [first, second] = activePointers;
+          const bounds = event.currentTarget.getBoundingClientRect();
+          const center = centerBetween(first, second);
+          const centerX = center.x - bounds.left;
+          const centerY = center.y - bounds.top;
+          const scale = clamp(
+            pinch.view.scale *
+              (distanceBetween(first, second) / Math.max(pinch.distance, 1)),
+            MIN_SCALE,
+            MAX_SCALE,
+          );
+
+          setView({
+            scale,
+            x: wrapX(centerX - pinch.mapX * scale, scale, map.worldWidth),
+            y: clampY(centerY - pinch.mapY * scale, scale, size.height),
+          });
+          return;
+        }
+
         const drag = dragRef.current;
 
         if (!drag || drag.pointerId !== event.pointerId) {
@@ -311,11 +568,30 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
         });
       }}
       onPointerUp={(event) => {
-        if (dragRef.current?.pointerId === event.pointerId) {
+        activePointersRef.current.delete(event.pointerId);
+
+        if (activePointersRef.current.size < 2) {
+          pinchRef.current = null;
+        }
+
+        if (activePointersRef.current.size === 1) {
+          const [remainingPointerId, remainingPointer] = Array.from(
+            activePointersRef.current.entries(),
+          )[0];
+
+          dragRef.current = {
+            pointerId: remainingPointerId,
+            startX: remainingPointer.x,
+            startY: remainingPointer.y,
+            view: latestViewRef.current,
+          };
+        } else if (dragRef.current?.pointerId === event.pointerId) {
           dragRef.current = null;
         }
       }}
       onPointerCancel={() => {
+        activePointersRef.current.clear();
+        pinchRef.current = null;
         dragRef.current = null;
       }}
     >
@@ -375,7 +651,7 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
           key={key}
           href={`/trips/${trip.slug}`}
           aria-label={`Open ${trip.title} trip`}
-          className="absolute z-10"
+          className="absolute z-10 flex items-center justify-center p-3 sm:p-2"
           onClick={(event) => handleMarkerClick(event, marker)}
           style={{
             left: x,
@@ -433,6 +709,83 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
         );
       })}
 
+      <div aria-hidden="true" className="pointer-events-none absolute inset-0 z-20">
+        {mapTrail.flatMap((point, pointIndex) =>
+          WORLD_COPIES.map((copy) => {
+            const x =
+              view.x + (point.x + copy * map.worldWidth) * view.scale;
+            const y = view.y + point.y * view.scale;
+
+            if (
+              x < -24 ||
+              x > size.width + 24 ||
+              y < -24 ||
+              y > size.height + 24
+            ) {
+              return null;
+            }
+
+            return (
+              <motion.span
+                key={`${point.id}-${copy}`}
+                className="absolute h-1.5 w-1.5 rounded-full bg-[#b9ac9c]"
+                initial={{ opacity: 0.44, scale: 1 }}
+                animate={{ opacity: 0, scale: 0.35 }}
+                transition={{
+                  duration: 2.6,
+                  ease: "easeOut",
+                  delay: pointIndex * 0.01,
+                }}
+                style={{
+                  left: x,
+                  top: y,
+                  transform: "translate(-50%, -50%)",
+                }}
+              />
+            );
+          }),
+        )}
+      </div>
+
+      {WORLD_COPIES.map((copy) => {
+        const x = view.x + (mapPlane.x + copy * map.worldWidth) * view.scale;
+        const y = view.y + mapPlane.y * view.scale;
+
+        if (
+          x < -48 ||
+          x > size.width + 48 ||
+          y < -48 ||
+          y > size.height + 48
+        ) {
+          return null;
+        }
+
+        return (
+          <Link
+            key={`plane-${copy}`}
+            href="/stats"
+            aria-label="Open flight globe"
+            className="group absolute z-30 flex h-10 w-10 items-center justify-center rounded-full text-[#343230] outline-none transition-colors hover:bg-white/60 focus-visible:bg-white/80 focus-visible:ring-2 focus-visible:ring-[#e2d7ca] sm:h-12 sm:w-12"
+            style={{
+              left: x,
+              top: y,
+              transform: "translate(-50%, -50%)",
+            }}
+          >
+            <motion.span
+              animate={{ y: [0, -3, 0], rotate: mapPlane.angle }}
+              transition={{
+                y: { duration: 2.3, repeat: Infinity, ease: "easeInOut" },
+                rotate: { duration: 0.2, ease: "easeOut" },
+              }}
+              className="flex"
+            >
+              <Plane className="h-4 w-4 fill-[#343230] stroke-[#343230] sm:h-5 sm:w-5" />
+            </motion.span>
+          </Link>
+        );
+      })}
+
       {clickPulse && (
         <motion.span
           key={clickPulse.key}
@@ -452,11 +805,11 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
         />
       )}
 
-      <div className="absolute bottom-5 right-5 z-30 flex items-center gap-1 rounded-full border border-[#ded0bd]/70 bg-white/35 p-1 shadow-[0_10px_24px_rgba(65,55,43,0.08)] backdrop-blur-md">
+      <div className="absolute bottom-[max(1rem,env(safe-area-inset-bottom))] right-4 z-30 flex items-center gap-1 rounded-full border border-[#ded0bd]/70 bg-white/35 p-1 shadow-[0_10px_24px_rgba(65,55,43,0.08)] backdrop-blur-md sm:bottom-5 sm:right-5">
         <button
           type="button"
           aria-label="Zoom out"
-          className="flex h-8 w-8 items-center justify-center rounded-full text-[#4f4941] transition-colors hover:bg-white/55"
+          className="flex h-10 w-10 items-center justify-center rounded-full text-[#4f4941] transition-colors hover:bg-white/55 sm:h-8 sm:w-8"
           onClick={() => zoomAt(view.scale * 0.78)}
         >
           <Minus className="h-4 w-4" />
@@ -464,15 +817,18 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
         <button
           type="button"
           aria-label="Reset map"
-          className="flex h-8 w-8 items-center justify-center rounded-full text-[#4f4941] transition-colors hover:bg-white/55"
-          onClick={() => setView({ scale: 1, x: 0, y: 0 })}
+          className="flex h-10 w-10 items-center justify-center rounded-full text-[#4f4941] transition-colors hover:bg-white/55 sm:h-8 sm:w-8"
+          onClick={() => {
+            hasInteractedRef.current = true;
+            setView(preferredView);
+          }}
         >
           <RotateCcw className="h-3.5 w-3.5" />
         </button>
         <button
           type="button"
           aria-label="Zoom in"
-          className="flex h-8 w-8 items-center justify-center rounded-full text-[#4f4941] transition-colors hover:bg-white/55"
+          className="flex h-10 w-10 items-center justify-center rounded-full text-[#4f4941] transition-colors hover:bg-white/55 sm:h-8 sm:w-8"
           onClick={() => zoomAt(view.scale * 1.28)}
         >
           <Plus className="h-4 w-4" />
