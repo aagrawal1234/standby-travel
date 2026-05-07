@@ -3,7 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "generate:media": "node scripts/generate-trip-media.mjs",
+    "predev": "npm run generate:media",
     "dev": "next dev",
+    "prebuild": "npm run generate:media",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"

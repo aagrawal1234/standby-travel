@@ -1,6 +1,4 @@
 import { notFound } from "next/navigation";
-import { existsSync, readdirSync } from "node:fs";
-import path from "node:path";
 import { ExternalLink } from "lucide-react";
 import { FadeIn } from "@/components/FadeIn";
 import { PlaneButton } from "@/components/PlaneButton";
@@ -8,6 +6,7 @@ import { TripIcon } from "@/components/TripIcon";
 import { TripMediaWall } from "@/components/TripMediaWall";
 import type { TripMedia } from "@/components/TripMediaWall";
 import type { TripImage } from "@/data/trips";
+import { tripMedia } from "@/data/trip-media.generated";
 import { getTripBySlug, trips } from "@/data/trips";
 
 export const dynamicParams = false;
@@ -22,38 +21,6 @@ const detailStickerShapeClasses = {
   landscape: "h-32 w-44 sm:h-40 sm:w-56",
 };
 
-const imageExtensions = new Set([
-  ".avif",
-  ".gif",
-  ".jpeg",
-  ".jpg",
-  ".png",
-  ".webp",
-]);
-const videoExtensions = new Set([".mp4", ".mov", ".ogg", ".webm"]);
-
-function mediaAltFromFilename(filename: string) {
-  return filename
-    .replace(/\.[^/.]+$/, "")
-    .replace(/^\d+[-_\s.]*/, "")
-    .replace(/[-_]+/g, " ")
-    .trim();
-}
-
-function mediaTypeFromExtension(filename: string): TripMedia["type"] | null {
-  const extension = path.extname(filename).toLowerCase();
-
-  if (imageExtensions.has(extension)) {
-    return "image";
-  }
-
-  if (videoExtensions.has(extension)) {
-    return "video";
-  }
-
-  return null;
-}
-
 function fallbackMedia(images: TripImage[]): TripMedia[] {
   return images.map((image) => ({
     type: "image",
@@ -63,37 +30,7 @@ function fallbackMedia(images: TripImage[]): TripMedia[] {
 }
 
 function getTripMedia(slug: string, fallbackImages: TripImage[]) {
-  const tripMediaDirectory = path.join(process.cwd(), "public", "trips", slug);
-
-  if (!existsSync(tripMediaDirectory)) {
-    return fallbackMedia(fallbackImages);
-  }
-
-  const media = readdirSync(tripMediaDirectory, { withFileTypes: true })
-    .filter((entry) => entry.isFile())
-    .map((entry) => {
-      const type = mediaTypeFromExtension(entry.name);
-
-      if (!type) {
-        return null;
-      }
-
-      const alt = mediaAltFromFilename(entry.name);
-
-      return {
-        type,
-        src: `/trips/${slug}/${entry.name}`,
-        alt: alt || `${slug} trip media`,
-      };
-    })
-    .filter((item): item is TripMedia => Boolean(item))
-    .sort((first, second) =>
-      first.src.localeCompare(second.src, undefined, {
-        numeric: true,
-        sensitivity: "base",
-      }),
-    );
-
+  const media = tripMedia[slug] ?? [];
   return media.length ? media : fallbackMedia(fallbackImages);
 }
 
