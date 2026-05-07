@@ -60,8 +60,7 @@ function placeholderImages(title: string): TripImage[] {
 
 function placeholderVlogLinks(title: string): VlogLink[] {
   return [
-    { title: `${title} vlog`, href: "#" },
-    { title: "Standby notes", href: "#" },
+    { title: `${title.toLowerCase()} vlog`, href: "#" },
   ];
 }
 
@@ -82,7 +81,7 @@ export const trips: Trip[] = [
     title: "Bay Area",
     date: "July 2025",
     iconType: "bay-area",
-    mapPoint: { lat: 37.3329, lng: -121.8198, offsetX: -22, offsetY: -18 },
+    mapPoint: { lat: 37.3329, lng: -121.8198, offsetX: -58, offsetY: -36 },
     sticker: {
       src: "/stickers/bay-area.png",
       alt: "Bay Area sticker",
@@ -128,7 +127,7 @@ export const trips: Trip[] = [
     title: "Mount Tamalpais",
     date: "Jan 23 - 25, 2026",
     iconType: "mount-tamalpais",
-    mapPoint: { lat: 37.9235, lng: -122.5965, offsetX: 12, offsetY: -12 },
+    mapPoint: { lat: 37.9235, lng: -122.5965, offsetX: 42, offsetY: -42 },
     sticker: {
       src: "/stickers/mount-tamalpais.png",
       alt: "Mount Tamalpais sticker",
@@ -173,7 +172,7 @@ export const trips: Trip[] = [
     title: "Alcatraz",
     date: "Feb 20 - 22, 2026",
     iconType: "bay-area",
-    mapPoint: { lat: 37.8267, lng: -122.423, offsetX: 22, offsetY: 4 },
+    mapPoint: { lat: 37.8267, lng: -122.423, offsetX: 64, offsetY: 12 },
     sticker: {
       src: "/stickers/alcatraz.png",
       alt: "Alcatraz sticker",
@@ -203,7 +202,7 @@ export const trips: Trip[] = [
     title: "Flying in SF",
     date: "March 14, 2026",
     iconType: "bay-area",
-    mapPoint: { lat: 37.3329, lng: -121.8198, offsetX: -18, offsetY: 18 },
+    mapPoint: { lat: 37.3329, lng: -121.8198, offsetX: 42, offsetY: 42 },
     sticker: {
       src: "/stickers/flying-in-sf.png",
       alt: "Flying in SF sticker",
@@ -218,7 +217,7 @@ export const trips: Trip[] = [
     title: "Yosemite",
     date: "March 20 - 22, 2026",
     iconType: "mount-tamalpais",
-    mapPoint: { lat: 37.8651, lng: -119.5383, offsetX: 18, offsetY: 22 },
+    mapPoint: { lat: 37.8651, lng: -119.5383, offsetX: 54, offsetY: 36 },
     sticker: {
       src: "/stickers/yosemite.png",
       alt: "Yosemite sticker",

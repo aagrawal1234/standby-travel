@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { Minus, Plane, Plus, RotateCcw } from "lucide-react";
-import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import { geoNaturalEarth1, geoPath } from "d3-geo";
 import { feature } from "topojson-client";
@@ -12,7 +11,6 @@ import type { Trip } from "@/data/trips";
 import type { Feature, Geometry } from "geojson";
 import type { Topology } from "topojson-specification";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { MouseEvent } from "react";
 
 type WorldStickerMapProps = {
   trips: Trip[];
@@ -49,19 +47,10 @@ type MapMarker = {
   src: string;
   x: number;
   y: number;
-  mapX: number;
-  mapY: number;
-  copy: number;
   anchorX: number;
   anchorY: number;
   key: string;
   hasLeader: boolean;
-};
-
-type ClickPulse = {
-  key: number;
-  x: number;
-  y: number;
 };
 
 type MapPlanePosition = {
@@ -156,7 +145,6 @@ function centerBetween(
 }
 
 export function WorldStickerMap({ trips }: WorldStickerMapProps) {
-  const router = useRouter();
   const viewportRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
   const latestViewRef = useRef<ViewState>({ scale: 1, x: 0, y: 0 });
@@ -164,16 +152,11 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
   const pinchRef = useRef<PinchState | null>(null);
   const hasInitializedViewRef = useRef(false);
   const hasInteractedRef = useRef(false);
-  const navigationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
-    null,
-  );
   const planeAnimationRef = useRef<number | null>(null);
   const planeCurrentRef = useRef({ x: 80, y: 80 });
   const planeTargetRef = useRef<MapPlaneTarget>({ x: 420, y: 220, speed: 90 });
   const trailIdRef = useRef(0);
-  const pulseKeyRef = useRef(0);
   const [view, setView] = useState<ViewState>({ scale: 1, x: 0, y: 0 });
-  const [clickPulse, setClickPulse] = useState<ClickPulse | null>(null);
   const [mapPlane, setMapPlane] = useState<MapPlanePosition>({
     x: 80,
     y: 80,
@@ -208,10 +191,6 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
 
   useEffect(() => {
     return () => {
-      if (navigationTimeoutRef.current) {
-        clearTimeout(navigationTimeoutRef.current);
-      }
-
       if (planeAnimationRef.current) {
         cancelAnimationFrame(planeAnimationRef.current);
       }
@@ -368,49 +347,6 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
     });
   };
 
-  const handleMarkerClick = (
-    event: MouseEvent<HTMLAnchorElement>,
-    marker: MapMarker,
-  ) => {
-    if (
-      event.metaKey ||
-      event.ctrlKey ||
-      event.shiftKey ||
-      event.altKey ||
-      event.button !== 0
-    ) {
-      return;
-    }
-
-    event.preventDefault();
-
-    setClickPulse({
-      key: pulseKeyRef.current++,
-      x: marker.x,
-      y: marker.y,
-    });
-
-    const targetPlaneX = marker.mapX + marker.copy * map.worldWidth;
-    const distance = Math.hypot(
-      targetPlaneX - planeCurrentRef.current.x,
-      marker.mapY - planeCurrentRef.current.y,
-    );
-
-    planeTargetRef.current = {
-      x: targetPlaneX,
-      y: marker.mapY,
-      speed: Math.max(distance / 0.62, 520 / view.scale),
-    };
-
-    if (navigationTimeoutRef.current) {
-      clearTimeout(navigationTimeoutRef.current);
-    }
-
-    navigationTimeoutRef.current = setTimeout(() => {
-      router.push(`/trips/${marker.trip.slug}`);
-    }, 680);
-  };
-
   const markers: MapMarker[] = trips.flatMap((trip, index) => {
     const point = map.projection([trip.mapPoint.lng, trip.mapPoint.lat]);
     const src = stickerImageSrc(trip);
@@ -420,8 +356,6 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
     }
 
     return WORLD_COPIES.flatMap((copy) => {
-      const mapX = point[0] + (trip.mapPoint.offsetX ?? 0) / view.scale;
-      const mapY = point[1] + (trip.mapPoint.offsetY ?? 0) / view.scale;
       const anchorX =
         view.x + copy * map.worldWidth * view.scale + point[0] * view.scale;
       const anchorY = view.y + point[1] * view.scale;
@@ -444,9 +378,6 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
           src,
           x,
           y,
-          mapX,
-          mapY,
-          copy,
           anchorX,
           anchorY,
           key: `${trip.slug}-${copy}`,
@@ -650,9 +581,8 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
         <Link
           key={key}
           href={`/trips/${trip.slug}`}
-          aria-label={`Open ${trip.title} trip`}
-          className="absolute z-10 flex items-center justify-center p-3 sm:p-2"
-          onClick={(event) => handleMarkerClick(event, marker)}
+            aria-label={`open ${trip.title.toLowerCase()} trip`}
+          className="absolute z-10 flex items-center justify-center p-2"
           style={{
             left: x,
             top: y,
@@ -680,12 +610,39 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
               scale: 1.18,
               rotate: [
                 trip.sticker.rotation,
-                trip.sticker.rotation - 5,
-                trip.sticker.rotation + 5,
+                trip.sticker.rotation - 7,
+                trip.sticker.rotation + 7,
                 trip.sticker.rotation,
               ],
+              transition: {
+                y: { duration: 0.12, ease: "easeOut" },
+                scale: { duration: 0.12, ease: "easeOut" },
+                rotate: {
+                  duration: 0.28,
+                  ease: "easeInOut",
+                  times: [0, 0.38, 0.76, 1],
+                },
+              },
             }}
-            whileTap={{ scale: 0.96 }}
+            whileTap={{
+              y: -5,
+              scale: 1.24,
+              rotate: [
+                trip.sticker.rotation,
+                trip.sticker.rotation + 10,
+                trip.sticker.rotation - 8,
+                trip.sticker.rotation,
+              ],
+              transition: {
+                scale: { duration: 0.1, ease: "easeOut" },
+                y: { duration: 0.1, ease: "easeOut" },
+                rotate: {
+                  duration: 0.18,
+                  ease: "easeInOut",
+                  times: [0, 0.35, 0.72, 1],
+                },
+              },
+            }}
             className={`group relative ${mapStickerShapeClasses[trip.sticker.shape]}`}
           >
             {src ? (
@@ -764,7 +721,7 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
           <Link
             key={`plane-${copy}`}
             href="/stats"
-            aria-label="Open flight globe"
+            aria-label="open flight globe"
             className="group absolute z-30 flex h-10 w-10 items-center justify-center rounded-full text-[#343230] outline-none transition-colors hover:bg-white/60 focus-visible:bg-white/80 focus-visible:ring-2 focus-visible:ring-[#e2d7ca] sm:h-12 sm:w-12"
             style={{
               left: x,
@@ -786,29 +743,10 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
         );
       })}
 
-      {clickPulse && (
-        <motion.span
-          key={clickPulse.key}
-          aria-hidden="true"
-          className="pointer-events-none absolute z-20 h-14 w-14 rounded-full border border-[#b7a995]/60 bg-white/10"
-          initial={{
-            x: clickPulse.x - 28,
-            y: clickPulse.y - 28,
-            opacity: 0.65,
-            scale: 0.35,
-          }}
-          animate={{
-            opacity: 0,
-            scale: 1.8,
-          }}
-          transition={{ duration: 0.62, ease: "easeOut" }}
-        />
-      )}
-
       <div className="absolute bottom-[max(1rem,env(safe-area-inset-bottom))] right-4 z-30 flex items-center gap-1 rounded-full border border-[#ded0bd]/70 bg-white/35 p-1 shadow-[0_10px_24px_rgba(65,55,43,0.08)] backdrop-blur-md sm:bottom-5 sm:right-5">
         <button
           type="button"
-          aria-label="Zoom out"
+          aria-label="zoom out"
           className="flex h-10 w-10 items-center justify-center rounded-full text-[#4f4941] transition-colors hover:bg-white/55 sm:h-8 sm:w-8"
           onClick={() => zoomAt(view.scale * 0.78)}
         >
@@ -816,7 +754,7 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
         </button>
         <button
           type="button"
-          aria-label="Reset map"
+          aria-label="reset map"
           className="flex h-10 w-10 items-center justify-center rounded-full text-[#4f4941] transition-colors hover:bg-white/55 sm:h-8 sm:w-8"
           onClick={() => {
             hasInteractedRef.current = true;
@@ -827,7 +765,7 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
         </button>
         <button
           type="button"
-          aria-label="Zoom in"
+          aria-label="zoom in"
           className="flex h-10 w-10 items-center justify-center rounded-full text-[#4f4941] transition-colors hover:bg-white/55 sm:h-8 sm:w-8"
           onClick={() => zoomAt(view.scale * 1.28)}
         >

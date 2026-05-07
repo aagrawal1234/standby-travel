@@ -51,11 +51,21 @@ export function PlaneButton({
       <Link
         href={href}
         aria-label={ariaLabel}
-        className="group fixed left-5 top-5 z-20 flex h-12 w-12 items-center justify-center rounded-full text-[#343230] outline-none transition-colors hover:bg-white/60 focus-visible:bg-white/80 focus-visible:ring-2 focus-visible:ring-[#e2d7ca] sm:left-7 sm:top-7"
+        className="group fixed left-5 top-5 z-20 flex h-10 w-10 items-center justify-center text-[#343230] outline-none focus-visible:ring-2 focus-visible:ring-[#d7c8b7] sm:left-7 sm:top-7"
       >
         <motion.span
-          animate={{ x: [0, -2, 0] }}
-          transition={{ duration: 2.4, repeat: Infinity, ease: "easeInOut" }}
+          whileHover={{
+            x: [-1, -5, -2, -5, -1],
+            y: [0, -1, 1, -1, 0],
+            rotate: [0, -8, 6, -5, 0],
+            transition: { duration: 0.3, ease: "easeInOut" },
+          }}
+          whileTap={{
+            x: -6,
+            scale: 1.18,
+            rotate: -10,
+            transition: { duration: 0.1, ease: "easeOut" },
+          }}
           className="flex"
         >
           <ArrowLeft className="h-5 w-5 stroke-[1.8]" />

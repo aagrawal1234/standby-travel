@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Standby Travel",
-  description: "A quiet little standby travel log.",
+  title: "standby travel",
+  description: "a quiet little standby travel log.",
   icons: {
     icon: "/stickers/flying-in-sf.png",
     shortcut: "/stickers/flying-in-sf.png",

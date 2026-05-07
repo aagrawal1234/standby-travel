@@ -1,8 +1,13 @@
 import { notFound } from "next/navigation";
+import { existsSync, readdirSync } from "node:fs";
+import path from "node:path";
 import { ExternalLink } from "lucide-react";
 import { FadeIn } from "@/components/FadeIn";
 import { PlaneButton } from "@/components/PlaneButton";
 import { TripIcon } from "@/components/TripIcon";
+import { TripMediaWall } from "@/components/TripMediaWall";
+import type { TripMedia } from "@/components/TripMediaWall";
+import type { TripImage } from "@/data/trips";
 import { getTripBySlug, trips } from "@/data/trips";
 
 export const dynamicParams = false;
@@ -16,6 +21,81 @@ const detailStickerShapeClasses = {
   portrait: "h-40 w-32 sm:h-48 sm:w-40",
   landscape: "h-32 w-44 sm:h-40 sm:w-56",
 };
+
+const imageExtensions = new Set([
+  ".avif",
+  ".gif",
+  ".jpeg",
+  ".jpg",
+  ".png",
+  ".webp",
+]);
+const videoExtensions = new Set([".mp4", ".mov", ".ogg", ".webm"]);
+
+function mediaAltFromFilename(filename: string) {
+  return filename
+    .replace(/\.[^/.]+$/, "")
+    .replace(/^\d+[-_\s.]*/, "")
+    .replace(/[-_]+/g, " ")
+    .trim();
+}
+
+function mediaTypeFromExtension(filename: string): TripMedia["type"] | null {
+  const extension = path.extname(filename).toLowerCase();
+
+  if (imageExtensions.has(extension)) {
+    return "image";
+  }
+
+  if (videoExtensions.has(extension)) {
+    return "video";
+  }
+
+  return null;
+}
+
+function fallbackMedia(images: TripImage[]): TripMedia[] {
+  return images.map((image) => ({
+    type: "image",
+    src: image.src,
+    alt: image.alt,
+  }));
+}
+
+function getTripMedia(slug: string, fallbackImages: TripImage[]) {
+  const tripMediaDirectory = path.join(process.cwd(), "public", "trips", slug);
+
+  if (!existsSync(tripMediaDirectory)) {
+    return fallbackMedia(fallbackImages);
+  }
+
+  const media = readdirSync(tripMediaDirectory, { withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => {
+      const type = mediaTypeFromExtension(entry.name);
+
+      if (!type) {
+        return null;
+      }
+
+      const alt = mediaAltFromFilename(entry.name);
+
+      return {
+        type,
+        src: `/trips/${slug}/${entry.name}`,
+        alt: alt || `${slug} trip media`,
+      };
+    })
+    .filter((item): item is TripMedia => Boolean(item))
+    .sort((first, second) =>
+      first.src.localeCompare(second.src, undefined, {
+        numeric: true,
+        sensitivity: "base",
+      }),
+    );
+
+  return media.length ? media : fallbackMedia(fallbackImages);
+}
 
 export default async function TripPage({
   params,
@@ -33,12 +113,14 @@ export default async function TripPage({
     trip.sticker.src && trip.sticker.version
       ? `${trip.sticker.src}?v=${encodeURIComponent(trip.sticker.version)}`
       : trip.sticker.src;
+  const media = getTripMedia(trip.slug, trip.images);
+  const vlogHref = trip.vlogLinks[0]?.href ?? "#";
 
   return (
     <FadeIn className="relative min-h-dvh overflow-hidden px-5 py-20 sm:px-8">
-      <PlaneButton href="/" variant="back" ariaLabel="Back home" />
+      <PlaneButton href="/" variant="back" ariaLabel="back home" />
 
-      <main className="mx-auto flex w-full max-w-4xl flex-col items-center">
+      <main className="mx-auto flex w-full max-w-6xl flex-col items-center">
         <div className="flex flex-col items-center text-center">
           {stickerSrc ? (
             <div
@@ -58,54 +140,24 @@ export default async function TripPage({
             />
           )}
           <h1 className="text-3xl font-semibold text-[#2d2b27] sm:text-4xl">
-            {trip.title}
+            {trip.title.toLowerCase()}!
           </h1>
-          <p className="mt-2 text-sm text-[#817b72]">{trip.date}</p>
-          <p className="mt-5 max-w-md text-sm leading-6 text-[#716b63]">
-            {trip.description}
+          <p className="mt-2 text-sm text-[#817b72]">
+            {trip.date.toLowerCase()}
           </p>
         </div>
 
-        <div className="mt-12 grid w-full grid-cols-2 gap-3 sm:grid-cols-4 sm:gap-4">
-          {trip.images.map((image, index) => (
-            <div
-              key={`${image.alt}-${index}`}
-              aria-label={image.alt}
-              className={`flex min-h-32 items-end rounded-2xl border border-[#eee8dd] bg-[#f7f0e7] bg-cover bg-center p-4 shadow-[0_18px_45px_rgba(76,67,54,0.06)] ${
-                index === 0 ? "col-span-2 min-h-56 sm:row-span-2" : ""
-              } ${index === 3 ? "sm:col-span-2" : ""}`}
-              style={
-                image.src ? { backgroundImage: `url(${image.src})` } : undefined
-              }
-            >
-              {!image.src && (
-                <span className="text-xs font-medium text-[#a1998f]">
-                  image {index + 1}
-                </span>
-              )}
-            </div>
-          ))}
-        </div>
+        <TripMediaWall media={media} />
 
-        <div className="mt-10 w-full max-w-xl">
-          <p className="mb-3 text-center text-xs font-medium text-[#9a9288]">
-            vlog links
-          </p>
-          <div className="grid gap-3 sm:grid-cols-2">
-            {trip.vlogLinks.map((link) => (
-              <a
-                key={link.title}
-                href={link.href}
-                target={link.href === "#" ? undefined : "_blank"}
-                rel={link.href === "#" ? undefined : "noreferrer"}
-                className="flex items-center justify-between rounded-2xl border border-[#eee8dd] bg-white/78 px-4 py-3 text-sm text-[#48443e] shadow-[0_16px_38px_rgba(76,67,54,0.06)] transition-colors hover:bg-white"
-              >
-                <span>{link.title}</span>
-                <ExternalLink className="h-3.5 w-3.5 text-[#a49a8d]" />
-              </a>
-            ))}
-          </div>
-        </div>
+        <a
+          href={vlogHref}
+          target={vlogHref === "#" ? undefined : "_blank"}
+          rel={vlogHref === "#" ? undefined : "noreferrer"}
+          className="mt-12 inline-flex items-center gap-1.5 text-sm font-medium text-[#6f675e] transition-colors hover:text-[#2d2b27]"
+        >
+          <span>vlog link</span>
+          <ExternalLink className="h-3.5 w-3.5 text-[#a49a8d]" />
+        </a>
       </main>
     </FadeIn>
   );

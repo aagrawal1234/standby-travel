@@ -13,7 +13,7 @@ export function TravelGlobe() {
       />
 
       <svg
-        aria-label="Small animated travel globe"
+        aria-label="small animated travel globe"
         viewBox="0 0 260 260"
         className="relative h-full w-full overflow-visible"
       >

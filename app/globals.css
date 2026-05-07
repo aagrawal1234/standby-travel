@@ -21,6 +21,7 @@ body {
     radial-gradient(circle at 16% 12%, rgba(255, 255, 255, 0.28), transparent 22rem);
   color: var(--foreground);
   font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+  text-transform: lowercase;
 }
 
 a {
