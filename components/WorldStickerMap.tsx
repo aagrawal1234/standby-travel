@@ -26,6 +26,11 @@ type DragState = {
   pointerId: number;
   startX: number;
   startY: number;
+  lastX: number;
+  lastY: number;
+  lastTime: number;
+  velocityX: number;
+  velocityY: number;
   view: ViewState;
 };
 
@@ -145,6 +150,8 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
   const pinchRef = useRef<PinchState | null>(null);
   const hasInitializedViewRef = useRef(false);
   const hasInteractedRef = useRef(false);
+  const inertiaAnimationRef = useRef<number | null>(null);
+  const inertiaVelocityRef = useRef({ x: 0, y: 0 });
   const planeAnimationRef = useRef<number | null>(null);
   const isPlanePausedRef = useRef(false);
   const planePauseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
@@ -187,6 +194,10 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
 
   useEffect(() => {
     return () => {
+      if (inertiaAnimationRef.current) {
+        cancelAnimationFrame(inertiaAnimationRef.current);
+      }
+
       if (planeAnimationRef.current) {
         cancelAnimationFrame(planeAnimationRef.current);
       }
@@ -255,19 +266,77 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
     hasInitializedViewRef.current = true;
   }, [preferredView]);
 
+  const stopInertia = () => {
+    if (inertiaAnimationRef.current) {
+      cancelAnimationFrame(inertiaAnimationRef.current);
+      inertiaAnimationRef.current = null;
+    }
+
+    inertiaVelocityRef.current = { x: 0, y: 0 };
+  };
+
+  const startInertia = (velocityX: number, velocityY: number) => {
+    stopInertia();
+
+    const initialSpeed = Math.hypot(velocityX, velocityY);
+
+    if (initialSpeed < 80) {
+      return;
+    }
+
+    inertiaVelocityRef.current = {
+      x: clamp(velocityX, -2200, 2200),
+      y: clamp(velocityY, -2200, 2200),
+    };
+
+    let lastTime = performance.now();
+
+    const tick = (now: number) => {
+      const dt = Math.min((now - lastTime) / 1000, 0.05);
+      lastTime = now;
+
+      const velocity = inertiaVelocityRef.current;
+
+      setView((current) => ({
+        ...current,
+        x: wrapX(
+          current.x + velocity.x * dt,
+          current.scale,
+          map.worldWidth,
+        ),
+        y: clampY(current.y + velocity.y * dt, current.scale, size.height),
+      }));
+
+      const decay = Math.pow(0.9, dt * 60);
+      const nextVelocity = {
+        x: velocity.x * decay,
+        y: velocity.y * decay,
+      };
+
+      inertiaVelocityRef.current = nextVelocity;
+
+      if (Math.hypot(nextVelocity.x, nextVelocity.y) < 14) {
+        stopInertia();
+        return;
+      }
+
+      inertiaAnimationRef.current = requestAnimationFrame(tick);
+    };
+
+    inertiaAnimationRef.current = requestAnimationFrame(tick);
+  };
+
   useEffect(() => {
     const prefersReducedMotion = window.matchMedia(
       "(prefers-reduced-motion: reduce)",
     ).matches;
 
-    if (prefersReducedMotion) {
-      return;
-    }
-
     const pickTarget = (): MapPlaneTarget => ({
       x: Math.random() * map.worldWidth,
       y: 34 + Math.random() * Math.max(size.height - 68, 1),
-      speed: 48 + Math.random() * 95,
+      speed: prefersReducedMotion
+        ? 14 + Math.random() * 18
+        : 48 + Math.random() * 95,
     });
 
     planeCurrentRef.current = {
@@ -325,6 +394,7 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
 
   const zoomAt = (nextScale: number, originX?: number, originY?: number) => {
     hasInteractedRef.current = true;
+    stopInertia();
 
     setView((current) => {
       const centerX = originX ?? size.width / 2;
@@ -400,7 +470,7 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
   return (
     <div
       ref={viewportRef}
-      className="relative h-dvh w-full touch-none overflow-hidden outline-none"
+      className="relative h-full min-h-[100svh] w-full touch-none overflow-hidden overscroll-none outline-none"
       onWheel={(event) => {
         event.preventDefault();
         hasInteractedRef.current = true;
@@ -419,6 +489,7 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
         }
 
         hasInteractedRef.current = true;
+        stopInertia();
         event.currentTarget.setPointerCapture(event.pointerId);
         activePointersRef.current.set(event.pointerId, {
           x: event.clientX,
@@ -448,6 +519,11 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
             pointerId: event.pointerId,
             startX: event.clientX,
             startY: event.clientY,
+            lastX: event.clientX,
+            lastY: event.clientY,
+            lastTime: performance.now(),
+            velocityX: 0,
+            velocityY: 0,
             view: latestViewRef.current,
           };
         }
@@ -490,6 +566,14 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
           return;
         }
 
+        const now = performance.now();
+        const dt = Math.max((now - drag.lastTime) / 1000, 0.001);
+        drag.velocityX = (event.clientX - drag.lastX) / dt;
+        drag.velocityY = (event.clientY - drag.lastY) / dt;
+        drag.lastX = event.clientX;
+        drag.lastY = event.clientY;
+        drag.lastTime = now;
+
         setView({
           ...drag.view,
           x: wrapX(
@@ -520,9 +604,15 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
             pointerId: remainingPointerId,
             startX: remainingPointer.x,
             startY: remainingPointer.y,
+            lastX: remainingPointer.x,
+            lastY: remainingPointer.y,
+            lastTime: performance.now(),
+            velocityX: 0,
+            velocityY: 0,
             view: latestViewRef.current,
           };
         } else if (dragRef.current?.pointerId === event.pointerId) {
+          startInertia(dragRef.current.velocityX, dragRef.current.velocityY);
           dragRef.current = null;
         }
       }}
@@ -530,6 +620,7 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
         activePointersRef.current.clear();
         pinchRef.current = null;
         dragRef.current = null;
+        stopInertia();
       }}
     >
       <svg
