@@ -205,7 +205,7 @@ function FlyingPlaneButton({
       <Link
         href={href}
         aria-label={ariaLabel}
-        className="group fixed z-20 flex h-12 w-12 items-center justify-center rounded-full text-[#343230] outline-none transition-colors hover:bg-white/60 focus-visible:bg-white/80 focus-visible:ring-2 focus-visible:ring-[#e2d7ca]"
+        className="group fixed z-20 flex h-12 w-12 items-center justify-center text-[#343230] outline-none focus-visible:ring-2 focus-visible:ring-[#d7c8b7]"
         style={{
           left: plane.x,
           top: plane.y,

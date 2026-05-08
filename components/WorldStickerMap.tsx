@@ -65,15 +65,8 @@ type MapPlaneTarget = {
   speed: number;
 };
 
-type MapTrailPoint = {
-  id: number;
-  x: number;
-  y: number;
-};
-
 const MIN_SCALE = 1;
 const MAX_SCALE = 14;
-const TRAIL_POINTS = 26;
 const WORLD_COPIES = [-1, 0, 1, 2];
 
 const mapStickerShapeClasses = {
@@ -153,16 +146,19 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
   const hasInitializedViewRef = useRef(false);
   const hasInteractedRef = useRef(false);
   const planeAnimationRef = useRef<number | null>(null);
+  const isPlanePausedRef = useRef(false);
+  const planePauseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
   const planeCurrentRef = useRef({ x: 80, y: 80 });
   const planeTargetRef = useRef<MapPlaneTarget>({ x: 420, y: 220, speed: 90 });
-  const trailIdRef = useRef(0);
   const [view, setView] = useState<ViewState>({ scale: 1, x: 0, y: 0 });
+  const [isPlanePaused, setIsPlanePaused] = useState(false);
   const [mapPlane, setMapPlane] = useState<MapPlanePosition>({
     x: 80,
     y: 80,
     angle: -25,
   });
-  const [mapTrail, setMapTrail] = useState<MapTrailPoint[]>([]);
   const [size, setSize] = useState<ViewportSize>({
     width: 1200,
     height: 720,
@@ -193,6 +189,10 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
     return () => {
       if (planeAnimationRef.current) {
         cancelAnimationFrame(planeAnimationRef.current);
+      }
+
+      if (planePauseTimeoutRef.current) {
+        clearTimeout(planePauseTimeoutRef.current);
       }
     };
   }, []);
@@ -277,11 +277,15 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
     planeTargetRef.current = pickTarget();
 
     let lastTime = performance.now();
-    let lastTrailTime = 0;
 
     const tick = (now: number) => {
       const dt = Math.min((now - lastTime) / 1000, 0.05);
       lastTime = now;
+
+      if (isPlanePausedRef.current) {
+        planeAnimationRef.current = requestAnimationFrame(tick);
+        return;
+      }
 
       const current = planeCurrentRef.current;
       const target = planeTargetRef.current;
@@ -305,14 +309,6 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
 
         planeCurrentRef.current = next;
         setMapPlane({ ...next, angle });
-
-        if (now - lastTrailTime > 105) {
-          lastTrailTime = now;
-          setMapTrail((points) => [
-            ...points.slice(-(TRAIL_POINTS - 1)),
-            { id: trailIdRef.current++, ...next },
-          ]);
-        }
       }
 
       planeAnimationRef.current = requestAnimationFrame(tick);
@@ -345,6 +341,16 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
         y: clampY(nextY, scale, size.height),
       };
     });
+  };
+
+  const setPlanePaused = (paused: boolean) => {
+    if (planePauseTimeoutRef.current) {
+      clearTimeout(planePauseTimeoutRef.current);
+      planePauseTimeoutRef.current = null;
+    }
+
+    isPlanePausedRef.current = paused;
+    setIsPlanePaused(paused);
   };
 
   const markers: MapMarker[] = trips.flatMap((trip, index) => {
@@ -666,44 +672,6 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
         );
       })}
 
-      <div aria-hidden="true" className="pointer-events-none absolute inset-0 z-20">
-        {mapTrail.flatMap((point, pointIndex) =>
-          WORLD_COPIES.map((copy) => {
-            const x =
-              view.x + (point.x + copy * map.worldWidth) * view.scale;
-            const y = view.y + point.y * view.scale;
-
-            if (
-              x < -24 ||
-              x > size.width + 24 ||
-              y < -24 ||
-              y > size.height + 24
-            ) {
-              return null;
-            }
-
-            return (
-              <motion.span
-                key={`${point.id}-${copy}`}
-                className="absolute h-1.5 w-1.5 rounded-full bg-[#b9ac9c]"
-                initial={{ opacity: 0.44, scale: 1 }}
-                animate={{ opacity: 0, scale: 0.35 }}
-                transition={{
-                  duration: 2.6,
-                  ease: "easeOut",
-                  delay: pointIndex * 0.01,
-                }}
-                style={{
-                  left: x,
-                  top: y,
-                  transform: "translate(-50%, -50%)",
-                }}
-              />
-            );
-          }),
-        )}
-      </div>
-
       {WORLD_COPIES.map((copy) => {
         const x = view.x + (mapPlane.x + copy * map.worldWidth) * view.scale;
         const y = view.y + mapPlane.y * view.scale;
@@ -721,8 +689,22 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
           <Link
             key={`plane-${copy}`}
             href="/stats"
-            aria-label="open flight globe"
-            className="group absolute z-30 flex h-10 w-10 items-center justify-center rounded-full text-[#343230] outline-none transition-colors hover:bg-white/60 focus-visible:bg-white/80 focus-visible:ring-2 focus-visible:ring-[#e2d7ca] sm:h-12 sm:w-12"
+            aria-label="open stats"
+            className="group absolute z-30 flex h-10 w-10 items-center justify-center text-[#343230] outline-none focus-visible:ring-2 focus-visible:ring-[#d7c8b7] sm:h-12 sm:w-12"
+            onBlur={() => {
+              setPlanePaused(false);
+            }}
+            onFocus={() => {
+              setPlanePaused(true);
+            }}
+            onMouseEnter={() => {
+              setPlanePaused(true);
+            }}
+            onMouseLeave={() => {
+              planePauseTimeoutRef.current = setTimeout(() => {
+                setPlanePaused(false);
+              }, 180);
+            }}
             style={{
               left: x,
               top: y,
@@ -730,10 +712,48 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
             }}
           >
             <motion.span
-              animate={{ y: [0, -3, 0], rotate: mapPlane.angle }}
+              animate={{
+                y: isPlanePaused ? [0, -4, 1, -3, 0] : [0, -3, 0],
+                x: isPlanePaused ? [0, 2, -1, 1, 0] : 0,
+                rotate: isPlanePaused
+                  ? [
+                      mapPlane.angle,
+                      mapPlane.angle - 10,
+                      mapPlane.angle + 8,
+                      mapPlane.angle,
+                    ]
+                  : mapPlane.angle,
+                scale: isPlanePaused ? 1.12 : 1,
+              }}
+              whileHover={{
+                y: [0, -5, -1, -5, 0],
+                x: [0, 2, -1, 2, 0],
+                scale: 1.12,
+                rotate: [
+                  mapPlane.angle,
+                  mapPlane.angle - 10,
+                  mapPlane.angle + 8,
+                  mapPlane.angle,
+                ],
+                transition: { duration: 0.36, ease: "easeInOut" },
+              }}
+              whileTap={{
+                scale: 1.2,
+                transition: { duration: 0.1, ease: "easeOut" },
+              }}
               transition={{
-                y: { duration: 2.3, repeat: Infinity, ease: "easeInOut" },
+                y: {
+                  duration: isPlanePaused ? 0.42 : 2.3,
+                  repeat: Infinity,
+                  ease: "easeInOut",
+                },
+                x: {
+                  duration: 0.42,
+                  repeat: isPlanePaused ? Infinity : 0,
+                  ease: "easeInOut",
+                },
                 rotate: { duration: 0.2, ease: "easeOut" },
+                scale: { duration: 0.12, ease: "easeOut" },
               }}
               className="flex"
             >
