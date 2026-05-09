@@ -20,6 +20,7 @@
 
 html,
 body {
+  height: 100%;
   min-height: 100%;
   margin: 0;
   background: var(--background);
@@ -39,19 +40,14 @@ body {
 
 .home-map-shell {
   position: fixed;
-  inset: 0;
+  top: 0;
+  left: 0;
   width: 100vw;
-  height: 100dvh;
+  height: 100vh;
+  height: 100lvh;
   overflow: hidden;
   background: var(--background);
-}
-
-@media (max-width: 699px) {
-  .home-map-shell {
-    top: calc(-1 * max(env(safe-area-inset-top, 0px), 56px));
-    bottom: calc(-1 * max(env(safe-area-inset-bottom, 0px), 88px));
-    height: auto;
-  }
+  touch-action: none;
 }
 
 a {
