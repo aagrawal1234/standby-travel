@@ -23,6 +23,7 @@ body {
   min-height: 100%;
   margin: 0;
   background: var(--background);
+  overscroll-behavior: none;
 }
 
 body {
@@ -32,6 +33,7 @@ body {
     radial-gradient(circle at 16% 12%, rgba(255, 255, 255, 0.28), transparent 22rem);
   color: var(--foreground);
   font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+  overflow-x: hidden;
   text-transform: lowercase;
 }
 

@@ -46,6 +46,15 @@ type ViewportSize = {
   height: number;
 };
 
+type ProjectedMap = {
+  projection: ReturnType<typeof geoNaturalEarth1>;
+  path: string;
+  worldWidth: number;
+  top: number;
+  bottom: number;
+  edgePadding: number;
+};
+
 type MapMarker = {
   trip: Trip;
   index: number;
@@ -73,6 +82,7 @@ type MapPlaneTarget = {
 const MIN_SCALE = 1;
 const MAX_SCALE = 14;
 const WORLD_COPIES = [-1, 0, 1, 2];
+const MOBILE_WIDTH = 700;
 
 const mapStickerShapeClasses = {
   square: "h-7 w-7 sm:h-10 sm:w-10 lg:h-12 lg:w-12",
@@ -107,12 +117,22 @@ function wrapMapX(x: number, width: number) {
   return ((x % width) + width) % width;
 }
 
-function clampY(y: number, scale: number, height: number) {
-  if (scale <= 1) {
-    return 0;
+function clampMapY(
+  y: number,
+  scale: number,
+  viewportHeight: number,
+  mapTop: number,
+  mapBottom: number,
+  edgePadding = 0,
+) {
+  const minY = viewportHeight - mapBottom * scale + edgePadding;
+  const maxY = -mapTop * scale - edgePadding;
+
+  if (minY > maxY) {
+    return (minY + maxY) / 2;
   }
 
-  return clamp(y, height - height * scale, 0);
+  return clamp(y, minY, maxY);
 }
 
 function stickerImageSrc(trip: Trip) {
@@ -150,6 +170,8 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
   const pinchRef = useRef<PinchState | null>(null);
   const hasInitializedViewRef = useRef(false);
   const hasInteractedRef = useRef(false);
+  const didDragRef = useRef(false);
+  const pointerStartRef = useRef({ x: 0, y: 0 });
   const pendingViewRef = useRef<ViewState | null>(null);
   const viewAnimationRef = useRef<number | null>(null);
   const inertiaAnimationRef = useRef<number | null>(null);
@@ -236,8 +258,11 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
     });
   };
 
-  const map = useMemo(() => {
-    const projection = geoNaturalEarth1().fitHeight(size.height, landFeature);
+  const map = useMemo<ProjectedMap>(() => {
+    const isMobile = size.width < MOBILE_WIDTH;
+    const fittedHeight = isMobile ? size.height * 1.62 : size.height;
+    const verticalBleed = Math.max((fittedHeight - size.height) / 2, 0);
+    const projection = geoNaturalEarth1().fitHeight(fittedHeight, landFeature);
     const path = geoPath(projection);
     const bounds = path.bounds(landFeature);
     const worldWidth = bounds[1][0] - bounds[0][0];
@@ -245,7 +270,7 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
 
     projection.translate([
       translateX + (size.width - worldWidth) / 2 - bounds[0][0],
-      translateY - bounds[0][1],
+      translateY - bounds[0][1] - verticalBleed,
     ]);
 
     const fittedBounds = path.bounds(landFeature);
@@ -254,12 +279,19 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
       projection,
       path: path(landFeature) ?? "",
       worldWidth: fittedBounds[1][0] - fittedBounds[0][0],
+      top: fittedBounds[0][1],
+      bottom: fittedBounds[1][1],
+      edgePadding: isMobile ? 38 : 0,
     };
   }, [size.height, size.width]);
 
   const preferredView = useMemo(() => {
-    if (size.width >= 700) {
-      return { scale: 1, x: 0, y: 0 };
+    if (size.width >= MOBILE_WIDTH) {
+      return {
+        scale: 1,
+        x: 0,
+        y: clampMapY(0, 1, size.height, map.top, map.bottom, map.edgePadding),
+      };
     }
 
     const projectedTrips = trips
@@ -267,7 +299,11 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
       .filter((point): point is [number, number] => Boolean(point));
 
     if (!projectedTrips.length) {
-      return { scale: 1, x: 0, y: 0 };
+      return {
+        scale: 1,
+        x: 0,
+        y: clampMapY(0, 1, size.height, map.top, map.bottom, map.edgePadding),
+      };
     }
 
     const averageX =
@@ -276,12 +312,19 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
     const averageY =
       projectedTrips.reduce((total, point) => total + point[1], 0) /
       projectedTrips.length;
-    const scale = 1.18;
+    const scale = size.width < 480 ? 1.08 : 1.04;
 
     return {
       scale,
       x: wrapX(size.width / 2 - averageX * scale, scale, map.worldWidth),
-      y: clampY(size.height / 2 - averageY * scale, scale, size.height),
+      y: clampMapY(
+        size.height / 2 - averageY * scale,
+        scale,
+        size.height,
+        map.top,
+        map.bottom,
+        map.edgePadding,
+      ),
     };
   }, [map, size.height, size.width, trips]);
 
@@ -314,8 +357,8 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
     }
 
     inertiaVelocityRef.current = {
-      x: clamp(velocityX, -2200, 2200),
-      y: clamp(velocityY, -2200, 2200),
+      x: clamp(velocityX, -1900, 1900),
+      y: clamp(velocityY, -1900, 1900),
     };
 
     let lastTime = performance.now();
@@ -328,6 +371,16 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
 
       const current = latestViewRef.current;
 
+      const rawY = current.y + velocity.y * dt;
+      const nextY = clampMapY(
+        rawY,
+        current.scale,
+        size.height,
+        map.top,
+        map.bottom,
+        map.edgePadding,
+      );
+
       applyView({
         ...current,
         x: wrapX(
@@ -335,18 +388,18 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
           current.scale,
           map.worldWidth,
         ),
-        y: clampY(current.y + velocity.y * dt, current.scale, size.height),
+        y: nextY,
       });
 
-      const decay = Math.exp(-2.25 * dt);
+      const decay = Math.exp(-1.65 * dt);
       const nextVelocity = {
         x: velocity.x * decay,
-        y: velocity.y * decay,
+        y: Math.abs(nextY - rawY) > 0.5 ? 0 : velocity.y * decay,
       };
 
       inertiaVelocityRef.current = nextVelocity;
 
-      if (Math.hypot(nextVelocity.x, nextVelocity.y) < 22) {
+      if (Math.hypot(nextVelocity.x, nextVelocity.y) < 12) {
         stopInertia();
         return;
       }
@@ -439,7 +492,14 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
       const nextView = {
         scale,
         x: wrapX(nextX, scale, map.worldWidth),
-        y: clampY(nextY, scale, size.height),
+        y: clampMapY(
+          nextY,
+          scale,
+          size.height,
+          map.top,
+          map.bottom,
+          map.edgePadding,
+        ),
       };
 
       latestViewRef.current = nextView;
@@ -455,6 +515,12 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
 
     isPlanePausedRef.current = paused;
     setIsPlanePaused(paused);
+  };
+
+  const clearDragGuardSoon = () => {
+    window.setTimeout(() => {
+      didDragRef.current = false;
+    }, 120);
   };
 
   const markers: MapMarker[] = trips.flatMap((trip, index) => {
@@ -504,7 +570,17 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
   return (
     <div
       ref={viewportRef}
-      className="relative h-full min-h-[100svh] w-full touch-none overflow-hidden overscroll-none outline-none"
+      className="relative h-full w-full touch-none overflow-hidden overscroll-none outline-none"
+      style={{ WebkitTapHighlightColor: "transparent" }}
+      onClickCapture={(event) => {
+        if (!didDragRef.current) {
+          return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+        didDragRef.current = false;
+      }}
       onWheel={(event) => {
         event.preventDefault();
         hasInteractedRef.current = true;
@@ -518,11 +594,13 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
         );
       }}
       onPointerDown={(event) => {
-        if ((event.target as HTMLElement).closest("a,button")) {
+        if (event.pointerType === "mouse" && event.button !== 0) {
           return;
         }
 
         hasInteractedRef.current = true;
+        didDragRef.current = false;
+        pointerStartRef.current = { x: event.clientX, y: event.clientY };
         stopInertia();
         event.currentTarget.setPointerCapture(event.pointerId);
         activePointersRef.current.set(event.pointerId, {
@@ -564,6 +642,7 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
       }}
       onPointerMove={(event) => {
         if (activePointersRef.current.has(event.pointerId)) {
+          event.preventDefault();
           activePointersRef.current.set(event.pointerId, {
             x: event.clientX,
             y: event.clientY,
@@ -589,8 +668,16 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
           applyView({
             scale,
             x: wrapX(centerX - pinch.mapX * scale, scale, map.worldWidth),
-            y: clampY(centerY - pinch.mapY * scale, scale, size.height),
+            y: clampMapY(
+              centerY - pinch.mapY * scale,
+              scale,
+              size.height,
+              map.top,
+              map.bottom,
+              map.edgePadding,
+            ),
           });
+          didDragRef.current = true;
           return;
         }
 
@@ -602,8 +689,19 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
 
         const now = performance.now();
         const dt = Math.max((now - drag.lastTime) / 1000, 0.001);
-        drag.velocityX = (event.clientX - drag.lastX) / dt;
-        drag.velocityY = (event.clientY - drag.lastY) / dt;
+        const totalDistance = Math.hypot(
+          event.clientX - pointerStartRef.current.x,
+          event.clientY - pointerStartRef.current.y,
+        );
+
+        if (totalDistance > 5) {
+          didDragRef.current = true;
+        }
+
+        const instantVelocityX = (event.clientX - drag.lastX) / dt;
+        const instantVelocityY = (event.clientY - drag.lastY) / dt;
+        drag.velocityX = drag.velocityX * 0.62 + instantVelocityX * 0.38;
+        drag.velocityY = drag.velocityY * 0.62 + instantVelocityY * 0.38;
         drag.lastX = event.clientX;
         drag.lastY = event.clientY;
         drag.lastTime = now;
@@ -615,10 +713,13 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
             drag.view.scale,
             map.worldWidth,
           ),
-          y: clampY(
+          y: clampMapY(
             drag.view.y + event.clientY - drag.startY,
             drag.view.scale,
             size.height,
+            map.top,
+            map.bottom,
+            map.edgePadding,
           ),
         });
       }}
@@ -649,11 +750,16 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
           startInertia(dragRef.current.velocityX, dragRef.current.velocityY);
           dragRef.current = null;
         }
+
+        if (didDragRef.current) {
+          clearDragGuardSoon();
+        }
       }}
       onPointerCancel={() => {
         activePointersRef.current.clear();
         pinchRef.current = null;
         dragRef.current = null;
+        didDragRef.current = false;
         stopInertia();
       }}
     >
@@ -664,11 +770,8 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
         fill="none"
       >
         {WORLD_COPIES.map((copy) => (
-          <motion.g
+          <g
             key={copy}
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ duration: 0.7, ease: "easeOut" }}
             transform={`matrix(${view.scale} 0 0 ${view.scale} ${
               view.x + copy * map.worldWidth * view.scale
             } ${view.y})`}
@@ -682,7 +785,7 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
               strokeLinejoin="round"
               vectorEffect="non-scaling-stroke"
             />
-          </motion.g>
+          </g>
         ))}
 
         <g>
