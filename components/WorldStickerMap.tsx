@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Minus, Plane, Plus, RotateCcw } from "lucide-react";
+import { Plane } from "lucide-react";
 import { motion } from "framer-motion";
 import { geoNaturalEarth1, geoPath } from "d3-geo";
 import { feature } from "topojson-client";
@@ -150,6 +150,8 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
   const pinchRef = useRef<PinchState | null>(null);
   const hasInitializedViewRef = useRef(false);
   const hasInteractedRef = useRef(false);
+  const pendingViewRef = useRef<ViewState | null>(null);
+  const viewAnimationRef = useRef<number | null>(null);
   const inertiaAnimationRef = useRef<number | null>(null);
   const inertiaVelocityRef = useRef({ x: 0, y: 0 });
   const planeAnimationRef = useRef<number | null>(null);
@@ -194,6 +196,10 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
 
   useEffect(() => {
     return () => {
+      if (viewAnimationRef.current) {
+        cancelAnimationFrame(viewAnimationRef.current);
+      }
+
       if (inertiaAnimationRef.current) {
         cancelAnimationFrame(inertiaAnimationRef.current);
       }
@@ -207,6 +213,28 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
       }
     };
   }, []);
+
+  const applyView = (nextView: ViewState) => {
+    latestViewRef.current = nextView;
+    pendingViewRef.current = nextView;
+
+    if (viewAnimationRef.current) {
+      return;
+    }
+
+    viewAnimationRef.current = requestAnimationFrame(() => {
+      viewAnimationRef.current = null;
+
+      const pendingView = pendingViewRef.current;
+
+      if (!pendingView) {
+        return;
+      }
+
+      pendingViewRef.current = null;
+      setView(pendingView);
+    });
+  };
 
   const map = useMemo(() => {
     const projection = geoNaturalEarth1().fitHeight(size.height, landFeature);
@@ -262,6 +290,7 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
       return;
     }
 
+    latestViewRef.current = preferredView;
     setView(preferredView);
     hasInitializedViewRef.current = true;
   }, [preferredView]);
@@ -297,7 +326,9 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
 
       const velocity = inertiaVelocityRef.current;
 
-      setView((current) => ({
+      const current = latestViewRef.current;
+
+      applyView({
         ...current,
         x: wrapX(
           current.x + velocity.x * dt,
@@ -305,9 +336,9 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
           map.worldWidth,
         ),
         y: clampY(current.y + velocity.y * dt, current.scale, size.height),
-      }));
+      });
 
-      const decay = Math.pow(0.9, dt * 60);
+      const decay = Math.exp(-2.25 * dt);
       const nextVelocity = {
         x: velocity.x * decay,
         y: velocity.y * decay,
@@ -315,7 +346,7 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
 
       inertiaVelocityRef.current = nextVelocity;
 
-      if (Math.hypot(nextVelocity.x, nextVelocity.y) < 14) {
+      if (Math.hypot(nextVelocity.x, nextVelocity.y) < 22) {
         stopInertia();
         return;
       }
@@ -405,11 +436,14 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
       const nextX = centerX - (centerX - current.x) * factor;
       const nextY = centerY - (centerY - current.y) * factor;
 
-      return {
+      const nextView = {
         scale,
         x: wrapX(nextX, scale, map.worldWidth),
         y: clampY(nextY, scale, size.height),
       };
+
+      latestViewRef.current = nextView;
+      return nextView;
     });
   };
 
@@ -552,7 +586,7 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
             MAX_SCALE,
           );
 
-          setView({
+          applyView({
             scale,
             x: wrapX(centerX - pinch.mapX * scale, scale, map.worldWidth),
             y: clampY(centerY - pinch.mapY * scale, scale, size.height),
@@ -574,7 +608,7 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
         drag.lastY = event.clientY;
         drag.lastTime = now;
 
-        setView({
+        applyView({
           ...drag.view,
           x: wrapX(
             drag.view.x + event.clientX - drag.startX,
@@ -854,35 +888,6 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
         );
       })}
 
-      <div className="absolute bottom-[max(1rem,env(safe-area-inset-bottom))] right-4 z-30 flex items-center gap-1 rounded-full border border-[#ded0bd]/70 bg-white/35 p-1 shadow-[0_10px_24px_rgba(65,55,43,0.08)] backdrop-blur-md sm:bottom-5 sm:right-5">
-        <button
-          type="button"
-          aria-label="zoom out"
-          className="flex h-10 w-10 items-center justify-center rounded-full text-[#4f4941] transition-colors hover:bg-white/55 sm:h-8 sm:w-8"
-          onClick={() => zoomAt(view.scale * 0.78)}
-        >
-          <Minus className="h-4 w-4" />
-        </button>
-        <button
-          type="button"
-          aria-label="reset map"
-          className="flex h-10 w-10 items-center justify-center rounded-full text-[#4f4941] transition-colors hover:bg-white/55 sm:h-8 sm:w-8"
-          onClick={() => {
-            hasInteractedRef.current = true;
-            setView(preferredView);
-          }}
-        >
-          <RotateCcw className="h-3.5 w-3.5" />
-        </button>
-        <button
-          type="button"
-          aria-label="zoom in"
-          className="flex h-10 w-10 items-center justify-center rounded-full text-[#4f4941] transition-colors hover:bg-white/55 sm:h-8 sm:w-8"
-          onClick={() => zoomAt(view.scale * 1.28)}
-        >
-          <Plus className="h-4 w-4" />
-        </button>
-      </div>
     </div>
   );
 }

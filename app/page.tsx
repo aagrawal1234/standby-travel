@@ -6,7 +6,7 @@ export default function Home() {
   const visibleTrips = trips.filter((trip) => trip.sticker.visible);
 
   return (
-    <FadeIn className="fixed inset-0 h-[100svh] min-h-[100dvh] overflow-hidden">
+    <FadeIn className="fixed inset-0 h-dvh w-screen overflow-hidden bg-background">
       <main className="h-full w-full">
         <WorldStickerMap trips={visibleTrips} />
       </main>
