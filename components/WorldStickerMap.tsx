@@ -5,7 +5,7 @@ import { Plane } from "lucide-react";
 import { motion } from "framer-motion";
 import { geoNaturalEarth1, geoPath } from "d3-geo";
 import { feature } from "topojson-client";
-import landAtlas from "world-atlas/land-50m.json";
+import landAtlas from "world-atlas/land-110m.json";
 import { TripIcon } from "@/components/TripIcon";
 import type { Trip } from "@/data/trips";
 import type { Feature, Geometry } from "geojson";
@@ -170,8 +170,7 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
   const pinchRef = useRef<PinchState | null>(null);
   const hasInitializedViewRef = useRef(false);
   const hasInteractedRef = useRef(false);
-  const didDragRef = useRef(false);
-  const pointerStartRef = useRef({ x: 0, y: 0 });
+  const isMapGestureRef = useRef(false);
   const pendingViewRef = useRef<ViewState | null>(null);
   const viewAnimationRef = useRef<number | null>(null);
   const inertiaAnimationRef = useRef<number | null>(null);
@@ -345,6 +344,7 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
     }
 
     inertiaVelocityRef.current = { x: 0, y: 0 };
+    isMapGestureRef.current = false;
   };
 
   const startInertia = (velocityX: number, velocityY: number) => {
@@ -360,6 +360,7 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
       x: clamp(velocityX, -1900, 1900),
       y: clamp(velocityY, -1900, 1900),
     };
+    isMapGestureRef.current = true;
 
     let lastTime = performance.now();
 
@@ -436,6 +437,11 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
       lastTime = now;
 
       if (isPlanePausedRef.current) {
+        planeAnimationRef.current = requestAnimationFrame(tick);
+        return;
+      }
+
+      if (isMapGestureRef.current) {
         planeAnimationRef.current = requestAnimationFrame(tick);
         return;
       }
@@ -517,12 +523,6 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
     setIsPlanePaused(paused);
   };
 
-  const clearDragGuardSoon = () => {
-    window.setTimeout(() => {
-      didDragRef.current = false;
-    }, 120);
-  };
-
   const markers: MapMarker[] = trips.flatMap((trip, index) => {
     const point = map.projection([trip.mapPoint.lng, trip.mapPoint.lat]);
     const src = stickerImageSrc(trip);
@@ -572,15 +572,6 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
       ref={viewportRef}
       className="relative h-full w-full touch-none overflow-hidden overscroll-none outline-none"
       style={{ WebkitTapHighlightColor: "transparent" }}
-      onClickCapture={(event) => {
-        if (!didDragRef.current) {
-          return;
-        }
-
-        event.preventDefault();
-        event.stopPropagation();
-        didDragRef.current = false;
-      }}
       onWheel={(event) => {
         event.preventDefault();
         hasInteractedRef.current = true;
@@ -594,14 +585,17 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
         );
       }}
       onPointerDown={(event) => {
+        if ((event.target as HTMLElement).closest("a,button")) {
+          return;
+        }
+
         if (event.pointerType === "mouse" && event.button !== 0) {
           return;
         }
 
         hasInteractedRef.current = true;
-        didDragRef.current = false;
-        pointerStartRef.current = { x: event.clientX, y: event.clientY };
         stopInertia();
+        isMapGestureRef.current = true;
         event.currentTarget.setPointerCapture(event.pointerId);
         activePointersRef.current.set(event.pointerId, {
           x: event.clientX,
@@ -677,7 +671,6 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
               map.edgePadding,
             ),
           });
-          didDragRef.current = true;
           return;
         }
 
@@ -689,15 +682,6 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
 
         const now = performance.now();
         const dt = Math.max((now - drag.lastTime) / 1000, 0.001);
-        const totalDistance = Math.hypot(
-          event.clientX - pointerStartRef.current.x,
-          event.clientY - pointerStartRef.current.y,
-        );
-
-        if (totalDistance > 5) {
-          didDragRef.current = true;
-        }
-
         const instantVelocityX = (event.clientX - drag.lastX) / dt;
         const instantVelocityY = (event.clientY - drag.lastY) / dt;
         drag.velocityX = drag.velocityX * 0.62 + instantVelocityX * 0.38;
@@ -750,16 +734,11 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
           startInertia(dragRef.current.velocityX, dragRef.current.velocityY);
           dragRef.current = null;
         }
-
-        if (didDragRef.current) {
-          clearDragGuardSoon();
-        }
       }}
       onPointerCancel={() => {
         activePointersRef.current.clear();
         pinchRef.current = null;
         dragRef.current = null;
-        didDragRef.current = false;
         stopInertia();
       }}
     >
