@@ -5,8 +5,7 @@ import { Plane } from "lucide-react";
 import { motion } from "framer-motion";
 import { geoNaturalEarth1, geoPath } from "d3-geo";
 import { feature } from "topojson-client";
-import landAtlas110 from "world-atlas/land-110m.json";
-import landAtlas50 from "world-atlas/land-50m.json";
+import landAtlas from "world-atlas/land-110m.json";
 import { TripIcon } from "@/components/TripIcon";
 import type { Trip } from "@/data/trips";
 import type { Feature, Geometry } from "geojson";
@@ -91,14 +90,9 @@ const mapStickerShapeClasses = {
   landscape: "h-7 w-9 sm:h-10 sm:w-14 lg:h-12 lg:w-16",
 };
 
-const mobileLandFeature = feature(
-  landAtlas110 as unknown as Topology,
-  (landAtlas110 as unknown as Topology).objects.land,
-) as Feature<Geometry>;
-
-const desktopLandFeature = feature(
-  landAtlas50 as unknown as Topology,
-  (landAtlas50 as unknown as Topology).objects.land,
+const landFeature = feature(
+  landAtlas as unknown as Topology,
+  (landAtlas as unknown as Topology).objects.land,
 ) as Feature<Geometry>;
 
 function clamp(value: number, min: number, max: number) {
@@ -174,6 +168,7 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
   const latestViewRef = useRef<ViewState>({ scale: 1, x: 0, y: 0 });
   const activePointersRef = useRef(new Map<number, { x: number; y: number }>());
   const pinchRef = useRef<PinchState | null>(null);
+  const hasInitializedViewRef = useRef(false);
   const hasInteractedRef = useRef(false);
   const isMapGestureRef = useRef(false);
   const pendingViewRef = useRef<ViewState | null>(null);
@@ -194,7 +189,6 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
     y: 80,
     angle: -25,
   });
-  const [hasMeasuredSize, setHasMeasuredSize] = useState(false);
   const [size, setSize] = useState<ViewportSize>({
     width: 1200,
     height: 720,
@@ -214,7 +208,6 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
         width: Math.max(entry.contentRect.width, 1),
         height: Math.max(entry.contentRect.height, 1),
       });
-      setHasMeasuredSize(true);
     });
 
     observer.observe(viewportRef.current);
@@ -266,12 +259,11 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
 
   const map = useMemo<ProjectedMap>(() => {
     const isMobile = size.width < MOBILE_WIDTH;
-    const land = isMobile ? mobileLandFeature : desktopLandFeature;
-    const fittedHeight = isMobile ? size.height * 2.15 : size.height;
+    const fittedHeight = isMobile ? size.height * 1.62 : size.height;
     const verticalBleed = Math.max((fittedHeight - size.height) / 2, 0);
-    const projection = geoNaturalEarth1().fitHeight(fittedHeight, land);
+    const projection = geoNaturalEarth1().fitHeight(fittedHeight, landFeature);
     const path = geoPath(projection);
-    const bounds = path.bounds(land);
+    const bounds = path.bounds(landFeature);
     const worldWidth = bounds[1][0] - bounds[0][0];
     const [translateX, translateY] = projection.translate();
 
@@ -280,15 +272,15 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
       translateY - bounds[0][1] - verticalBleed,
     ]);
 
-    const fittedBounds = path.bounds(land);
+    const fittedBounds = path.bounds(landFeature);
 
     return {
       projection,
-      path: path(land) ?? "",
+      path: path(landFeature) ?? "",
       worldWidth: fittedBounds[1][0] - fittedBounds[0][0],
       top: fittedBounds[0][1],
       bottom: fittedBounds[1][1],
-      edgePadding: isMobile ? 240 : 0,
+      edgePadding: isMobile ? 38 : 0,
     };
   }, [size.height, size.width]);
 
@@ -301,9 +293,11 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
       };
     }
 
-    const mobileCenter = map.projection([-106, 38]);
+    const projectedTrips = trips
+      .map((trip) => map.projection([trip.mapPoint.lng, trip.mapPoint.lat]))
+      .filter((point): point is [number, number] => Boolean(point));
 
-    if (!mobileCenter) {
+    if (!projectedTrips.length) {
       return {
         scale: 1,
         x: 0,
@@ -311,13 +305,19 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
       };
     }
 
-    const scale = size.width < 480 ? 1.04 : 1;
+    const averageX =
+      projectedTrips.reduce((total, point) => total + point[0], 0) /
+      projectedTrips.length;
+    const averageY =
+      projectedTrips.reduce((total, point) => total + point[1], 0) /
+      projectedTrips.length;
+    const scale = size.width < 480 ? 1.08 : 1.04;
 
     return {
       scale,
-      x: wrapX(size.width / 2 - mobileCenter[0] * scale, scale, map.worldWidth),
+      x: wrapX(size.width / 2 - averageX * scale, scale, map.worldWidth),
       y: clampMapY(
-        size.height / 2 - mobileCenter[1] * scale,
+        size.height / 2 - averageY * scale,
         scale,
         size.height,
         map.top,
@@ -325,16 +325,17 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
         map.edgePadding,
       ),
     };
-  }, [map, size.height, size.width]);
+  }, [map, size.height, size.width, trips]);
 
   useEffect(() => {
-    if (!hasMeasuredSize || hasInteractedRef.current) {
+    if (hasInitializedViewRef.current || hasInteractedRef.current) {
       return;
     }
 
     latestViewRef.current = preferredView;
     setView(preferredView);
-  }, [hasMeasuredSize, preferredView]);
+    hasInitializedViewRef.current = true;
+  }, [preferredView]);
 
   const stopInertia = () => {
     if (inertiaAnimationRef.current) {
@@ -796,9 +797,9 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
             aria-label={`open ${trip.title.toLowerCase()} trip`}
           className="absolute z-10 flex items-center justify-center p-2"
           style={{
-            left: 0,
-            top: 0,
-            transform: `translate3d(${x}px, ${y}px, 0) translate(-50%, -50%)`,
+            left: x,
+            top: y,
+            transform: "translate(-50%, -50%)",
           }}
         >
           <motion.div
@@ -912,9 +913,9 @@ export function WorldStickerMap({ trips }: WorldStickerMapProps) {
               }, 180);
             }}
             style={{
-              left: 0,
-              top: 0,
-              transform: `translate3d(${x}px, ${y}px, 0) translate(-50%, -50%)`,
+              left: x,
+              top: y,
+              transform: "translate(-50%, -50%)",
             }}
           >
             <motion.span
